@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>To Do</title>
+  <style>
+    :root[data-theme="light"] { color-scheme: light; background: #ffffff; color: #111111; }
+    :root[data-theme="dark"]  { color-scheme: dark;  background: #1e1e1e; color: #eeeeee; }
+    .overdue { color: #d00000; }
+    :root[data-theme="dark"] .overdue { color: #ff6b6b; }
+
+    /* Mobile-friendly layout */
+    body { margin: 0; padding: 12px; }
+    form { display: flex; flex-wrap: wrap; gap: 6px; }
+    #input { flex: 1 1 100%; }
+    ul { padding-left: 0; list-style: none; }
+    li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; }
+    li > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
+    input, select, button { font-size: 16px; min-height: 36px; } /* 16px stops iOS zooming on focus */
+    input[type="checkbox"] { width: 22px; height: 22px; min-height: 0; }
+  </style>
+</head>
+<body>
+  <div style="text-align: right">
+    Theme:
+    <select id="theme">
+      <option value="light">Light</option>
+      <option value="dark">Dark</option>
+    </select>
+  </div>
+
+  <h1 style="text-align: center">To Do</h1>
+
+  <form id="form">
+    <input id="input" type="text" placeholder="New item" autofocus>
+    <select id="category"></select>
+    <input id="due" type="date" title="Due date">
+    <button type="submit">Add</button>
+  </form>
+
+  <p>
+    Show:
+    <select id="filter"></select>
+  </p>
+
+  <ul id="list"></ul>
+
+  <script>
+    const form = document.getElementById('form');
+    const input = document.getElementById('input');
+    const categoryInput = document.getElementById('category');
+    const dueInput = document.getElementById('due');
+    const filter = document.getElementById('filter');
+    const list = document.getElementById('list');
+    const themeSelect = document.getElementById('theme');
+
+    const CATEGORIES = ['Home', 'Office'];
+
+    // Theme: use the saved choice, else the system preference.
+    function setTheme(theme) {
+      document.documentElement.dataset.theme = theme;
+      themeSelect.value = theme;
+      try { localStorage.setItem('theme', theme); } catch (e) {}
+    }
+    let savedTheme = null;
+    try { savedTheme = localStorage.getItem('theme'); } catch (e) {}
+    setTheme(savedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+    themeSelect.addEventListener('change', () => setTheme(themeSelect.value));
+
+    // Each todo: { id, text, category, due, done }
+    let todos = [];
+    try { todos = JSON.parse(localStorage.getItem('todos')) || []; } catch (e) {}
+    let editingId = null;
+
+    function save() {
+      try { localStorage.setItem('todos', JSON.stringify(todos)); } catch (e) {}
+    }
+
+    // Today as YYYY-MM-DD in local time (same format as the date input).
+    function today() {
+      const d = new Date();
+      const pad = n => String(n).padStart(2, '0');
+      return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+    }
+
+    function describe(t) {
+      let s = ' ' + t.text;
+      if (t.category) s += ' [' + t.category + ']';
+      if (t.due) s += ' (due ' + t.due + ')';
+      if (t.due && !t.done && t.due < today()) s += ' - OVERDUE';
+      return s + ' ';
+    }
+
+    function button(label, onClick, name) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      if (name) { b.title = name; b.setAttribute('aria-label', name); }
+      b.addEventListener('click', onClick);
+      return b;
+    }
+
+    function textField(value, placeholder) {
+      const f = document.createElement('input');
+      f.type = 'text';
+      f.value = value;
+      if (placeholder) f.placeholder = placeholder;
+      return f;
+    }
+
+    // Home and Office, plus any other category already on a saved item.
+    function categoryList() {
+      return [...new Set([...CATEGORIES, ...todos.map(t => t.category).filter(Boolean)])];
+    }
+
+    // Fill a <select> with a first "empty" choice followed by the categories.
+    function fillCategories(select, emptyLabel, selected) {
+      select.textContent = '';
+      const first = document.createElement('option');
+      first.value = '';
+      first.textContent = emptyLabel;
+      select.append(first);
+      for (const c of categoryList()) {
+        const o = document.createElement('option');
+        o.value = c;
+        o.textContent = c;
+        select.append(o);
+      }
+      select.value = selected;
+    }
+
+    function updateCategories() {
+      fillCategories(categoryInput, 'No category', categoryInput.value);
+      fillCategories(filter, 'All categories', filter.value);
+    }
+
+    function row(t) {
+      const li = document.createElement('li');
+
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.checked = t.done;
+      box.addEventListener('change', function () {
+        t.done = box.checked;
+        save();
+        render();
+      });
+      li.append(box);
+
+      if (editingId === t.id) {
+        const text = textField(t.text);
+        const category = document.createElement('select');
+        fillCategories(category, 'No category', t.category);
+        const due = document.createElement('input');
+        due.type = 'date';
+        due.value = t.due;
+
+        function commit() {
+          const value = text.value.trim();
+          if (value) t.text = value;
+          t.category = category.value.trim();
+          t.due = due.value;
+          editingId = null;
+          save();
+          render();
+        }
+        function cancel() { editingId = null; render(); }
+
+        const fields = document.createElement('span');
+        fields.append(' ', text, ' ', category, ' ', due, ' ');
+        fields.addEventListener('keydown', function (e) {
+          if (e.key === 'Enter') commit();
+          if (e.key === 'Escape') cancel();
+        });
+
+        li.append(fields, button('Save', commit), button('Cancel', cancel));
+        setTimeout(() => text.focus(), 0);
+      } else {
+        const span = document.createElement('span');
+        span.textContent = describe(t);
+        if (t.due && !t.done && t.due < today()) span.className = 'overdue';
+
+        li.append(
+          span,
+          button('✏️', function () { editingId = t.id; render(); }, 'Edit'),
+          button('🗑️', function () {
+            todos = todos.filter(x => x.id !== t.id);
+            save();
+            render();
+          }, 'Delete')
+        );
+      }
+      return li;
+    }
+
+    function render() {
+      updateCategories();
+      list.textContent = '';
+      for (const t of todos) {
+        if (filter.value && t.category !== filter.value) continue;
+        list.append(row(t));
+      }
+    }
+
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+
+      todos.push({
+        id: Date.now() + Math.random(),
+        text: text,
+        category: categoryInput.value.trim(),
+        due: dueInput.value,
+        done: false
+      });
+      save();
+      render();
+
+      input.value = '';
+      categoryInput.value = '';
+      dueInput.value = '';
+      input.focus();
+    });
+
+    filter.addEventListener('change', render);
+
+    render();
+  </script>
+</body>
+</html>
